@@ -1,5 +1,4 @@
-// Database models will be added in the data layer milestone.
-// See docs/mvp-spec.md for the full data contract.
+// See docs/mvp-spec.md for the full data contract and architecture.
 
 generator client {
   provider = "prisma-client"
@@ -8,4 +7,205 @@ generator client {
 
 datasource db {
   provider = "postgresql"
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum RevenueSource {
+  STRIPE
+  REVENUECAT
+}
+
+enum DataSourceStatus {
+  ACTIVE
+  ERROR
+  DISCONNECTED
+}
+
+enum RevenueEventType {
+  SUBSCRIPTION_NEW
+  SUBSCRIPTION_RENEWAL
+  ONE_TIME_PAYMENT
+  REFUND
+}
+
+enum AppClassification {
+  INSUFFICIENT_DATA
+  AT_RISK
+  DECLINING
+  SLIPPING
+  STABLE
+  GROWING
+  RECOVERING
+}
+
+enum RecommendationType {
+  OPPORTUNITY
+  RISK
+}
+
+// ---------------------------------------------------------------------------
+// Models
+// ---------------------------------------------------------------------------
+
+model User {
+  id                String   @id @default(uuid())
+  email             String   @unique
+  portfolioCurrency String   @default("USD")
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  apps              App[]
+  dataSources       DataSource[]
+  revenueEvents     NormalizedRevenueEvent[]
+  portfolioInsights PortfolioInsight[]
+
+  @@map("users")
+}
+
+model App {
+  id          String   @id @default(uuid())
+  userId      String
+  name        String
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user             User              @relation(fields: [userId], references: [id])
+  externalProducts ExternalProduct[]
+  dailyRevenue     DailyAppRevenue[]
+  appInsights      AppInsight[]
+
+  @@index([userId])
+  @@map("apps")
+}
+
+model DataSource {
+  id           String           @id @default(uuid())
+  userId       String
+  source       RevenueSource
+  status       DataSourceStatus @default(ACTIVE)
+  displayName  String
+  lastSyncedAt DateTime?
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  user             User              @relation(fields: [userId], references: [id])
+  externalProducts ExternalProduct[]
+
+  @@unique([userId, source])
+  @@index([userId])
+  @@map("data_sources")
+}
+
+model ExternalProduct {
+  id                String   @id @default(uuid())
+  dataSourceId      String
+  externalProductId String
+  displayName       String?
+  appId             String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  dataSource DataSource @relation(fields: [dataSourceId], references: [id])
+  app        App?       @relation(fields: [appId], references: [id])
+
+  @@unique([dataSourceId, externalProductId])
+  @@index([appId])
+  @@map("external_products")
+}
+
+model NormalizedRevenueEvent {
+  id                  String           @id @default(uuid())
+  idempotencyKey      String           @unique
+  userId              String
+  source              RevenueSource
+  sourceEventId       String
+  eventType           RevenueEventType
+  occurredAt          DateTime
+  ingestedAt          DateTime         @default(now())
+  // Signed integer in smallest currency unit (e.g. cents).
+  // Positive for revenue events, negative for refunds.
+  amount              Int
+  currency            String
+  isPortfolioCurrency Boolean
+  // Raw source product ID (e.g. Stripe price ID, RevenueCat product identifier).
+  // Not a FK — the mapping layer resolves this to appId via ExternalProduct.
+  sourceProductId     String?
+  externalCustomerId  String?
+  appId               String?
+  rawPayload          Json?
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId, source, occurredAt])
+  @@index([appId, occurredAt])
+  @@map("normalized_revenue_events")
+}
+
+model DailyAppRevenue {
+  id                         String   @id @default(uuid())
+  appId                      String
+  date                       DateTime @db.Date
+  // All amounts in smallest portfolio-currency unit (e.g. cents).
+  grossRevenue               Int      @default(0)
+  refunds                    Int      @default(0) // zero or negative
+  netRevenue                 Int      @default(0) // grossRevenue + refunds
+  newSubscriptionRevenue     Int      @default(0)
+  renewalRevenue             Int      @default(0)
+  oneTimeRevenue             Int      @default(0)
+  excludedCurrencyEventCount Int      @default(0)
+  excludedCurrencyGross      Int      @default(0)
+  updatedAt                  DateTime @updatedAt
+
+  app App @relation(fields: [appId], references: [id])
+
+  @@unique([appId, date])
+  @@index([appId, date])
+  @@map("daily_app_revenue")
+}
+
+model PortfolioInsight {
+  id                     String              @id @default(uuid())
+  userId                 String
+  generatedAt            DateTime            @default(now())
+  topRecommendationAppId String?
+  topRecommendationType  RecommendationType?
+  total7dNetRevenue      Int                 @default(0)
+  total28dNetRevenue     Int                 @default(0)
+  unmappedRevenue7d      Int                 @default(0)
+  hasUnmappedRevenue     Boolean             @default(false)
+  hasCurrencyWarning     Boolean             @default(false)
+  currencyWarningDetail  String?
+
+  user        User         @relation(fields: [userId], references: [id])
+  appInsights AppInsight[]
+
+  @@index([userId, generatedAt])
+  @@map("portfolio_insights")
+}
+
+model AppInsight {
+  id                  String              @id @default(uuid())
+  appId               String
+  portfolioInsightId  String
+  generatedAt         DateTime            @default(now())
+  classification      AppClassification
+  opportunityScore    Float?
+  riskScore           Float?
+  isTopRecommendation Boolean             @default(false)
+  recommendationType  RecommendationType?
+  isRefundDriven      Boolean             @default(false)
+  observation         String
+  interpretation      String
+  recommendation      String
+
+  app              App              @relation(fields: [appId], references: [id])
+  portfolioInsight PortfolioInsight @relation(fields: [portfolioInsightId], references: [id])
+
+  @@index([appId, generatedAt])
+  @@index([portfolioInsightId])
+  @@map("app_insights")
 }
