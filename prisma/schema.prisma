@@ -1,0 +1,11 @@
+// Database models will be added in the data layer milestone.
+// See docs/mvp-spec.md for the full data contract.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../app/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
